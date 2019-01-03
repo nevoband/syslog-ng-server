@@ -1,0 +1,102 @@
+@version:3.5
+@include "scl.conf"
+
+# {{ ansible_managed }}
+
+# Define Global Options
+options {
+  flush_lines (0);
+  time_reopen (10);
+  log_fifo_size (1000);
+  chain_hostnames (off);
+  use_dns (persist-only);
+  use_fqdn (yes);
+  create_dirs (no);
+  dns-cache-hosts (/etc/hosts);
+  keep_hostname (yes);
+  keep_timestamp (yes);
+  time-zone ("America/Chicago");
+};
+
+# Define input source
+source s_sys {
+  system();
+  internal();
+};
+
+#source s_tail {
+#{% for log_file in log_files %}
+#  file("{{ log_file.path }}" program-override("{{ log_file.program}}") flags(no-parse));
+#{% endfor %}
+#};
+
+source s_net {
+  tcp(
+    ip({{ syslogng_server_ip }}) port({{ syslogng_server_port }})
+    max-connections(100)
+    flags(syslog-protocol, no-multi-line)
+    tls(
+      ca-dir("{{ syslogng_ca_path }}")
+      key-file("{{ syslogng_server_cert_path }}/{{ syslogng_server_key_file }}")
+      cert-file("{{ syslogng_server_cert_path }}/{{ syslogng_server_cert_file }}")
+    )
+  );
+};
+
+# Define Destination for Local Logs
+destination d_cons { file("/dev/console"); };
+destination d_mesg { file("/var/log/messages"); };
+destination d_auth { file("/var/log/secure"); };
+destination d_mail { file("/var/log/maillog" flush_lines(10)); };
+destination d_spol { file("/var/log/spooler"); };
+destination d_boot { file("/var/log/boot.log"); };
+destination d_cron { file("/var/log/cron"); };
+destination d_kern { file("/var/log/kern"); };
+destination d_mlal { usertty("*"); };
+
+
+# Define Destination for Remote Log
+destination netlogpile { 
+  file(
+  "/opt/syslog-ng/log/$R_YEAR-$R_MONTH/$HOST_FROM/$HOST/$FULLHOST-$YEAR-$MONTH-$DAY.log"
+  owner({{ syslogng_server_logs_owner}}) 
+  group({{ syslogng_server_logs_group}}) 
+  perm ( 0600 )
+  create_dirs ( yes ) 
+  dir_perm( 0700 )
+  template("${ISODATE} ${PROGRAM} ${HOST} ${MESSAGE}\n")
+  );
+};
+
+# Define local logging filters
+filter f_kernel { facility(kern); };
+filter f_default { level(info..emerg) and
+  not (facility(mail)
+  or facility(authpriv)
+  or facility(cron)); };
+filter f_auth { facility(authpriv); };
+filter f_mail { facility(mail); };
+filter f_emergency { level(emerg); };
+filter f_news { facility(uucp) or
+  (facility(news)
+  and level(crit..emerg)); };
+filter f_boot { facility(local7); };
+filter f_cron { facility(cron); };
+
+# Define local logging destination
+log { source(s_sys); filter(f_kernel); destination(d_kern); };
+log { source(s_sys); filter(f_default); destination(d_mesg); };
+log { source(s_sys); filter(f_auth); destination(d_auth); };
+log { source(s_sys); filter(f_mail); destination(d_mail); };
+log { source(s_sys); filter(f_emergency); destination(d_mlal); };
+log { source(s_sys); filter(f_news); destination(d_spol); };
+log { source(s_sys); filter(f_boot); destination(d_boot); };
+log { source(s_sys); filter(f_cron); destination(d_cron); };
+
+# Define network logging destination
+log { source(s_sys); destination(netlogpile); };
+log { source(s_net); destination(netlogpile); };
+#log { source(s_tail); destination(netlogpile); };
+
+# Source additional configuration files (.conf extension only)
+@include "/etc/syslog-ng/conf.d/*.conf"
